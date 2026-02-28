@@ -1,0 +1,102 @@
+SELECT
+  -- Bot Error Fields
+  e.DATETIME as error_datetime,
+  e.EVENT as error_event,
+  e.SUBEVENT as error_subevent,
+  e.CUSTOMER_CARTON_REF_0 as carton_ref,
+  e.VIN as bot_vin,
+  e.BOT as bot_number,
+  e.ACTION_TYPE,
+  e.CASE_GROUP_NUMBER as error_case_group,
+  e.LEVEL as error_level,
+  e.SEVERITY,
+  e.ECODE_DESCRIPTION,
+  e.DEVICE_FAULT_CODE,
+  e.DEVICE_FAULT_DESCRIPTION,
+
+  -- Bot Measurements at Error Time
+  e.MEASURED_LENGTH as bot_measured_length,
+  e.MEASURED_WIDTH as bot_measured_width,
+  e.EXPECTED_LENGTH as bot_expected_length,
+  e.EXPECTED_WIDTH as bot_expected_width,
+  e.X_COORDINATE,
+  e.Y_COORDINATE,
+  e.Z_COORDINATE,
+  e.YAW,
+  e.VELOCITY_LINEAR,
+  e.VELOCITY_ROTATIONAL,
+  e.DISPLACEMENT_X,
+  e.DISPLACEMENT_Y,
+  e.DISPLACEMENT_YAW,
+  e.STACK_TRACE,
+
+  -- Inventory Location Info
+  i.Aisle,
+  i.Bay,
+  i.Shelf,
+  i.Level as inventory_level,
+  i.AisleSide,
+  i.`Seg Zone`,
+  i.`Shelf Height`,
+
+  -- Inventory Suspect Status
+  i.`Is Suspect` as is_suspect_in_inventory,
+  i.`Suspect Reason` as inventory_suspect_reason,
+  i.`Suspect Action` as inventory_suspect_action,
+  i.`Suspect Time` as inventory_suspect_time,
+
+  -- SKU Info
+  i.SKU,
+  i.`SKU Description`,
+  i.CaseGroupNumber as inventory_case_group,
+
+  -- Carton Dimensions from Inventory
+  i.`Carton Length` as inv_carton_length,
+  i.`Carton Width` as inv_carton_width,
+  i.`Carton Height` as inv_carton_height,
+  i.`Carton Weight` as inv_carton_weight,
+
+  -- ODV (Original Dimension Verification)
+  i.`ODV Length`,
+  i.`ODV Width`,
+  i.`ODV Height`,
+  i.`ODV Weight`,
+
+  -- IDV (Inbound Dimension Verification)
+  i.`IDV Length`,
+  i.`IDV Width`,
+  i.`IDV Height`,
+
+  -- Bot Measurements from Inventory
+  i.`Bot Measured Length` as inv_bot_measured_length,
+  i.`Bot Measured Width` as inv_bot_measured_width,
+  i.`Last Bot Number` as last_bot_that_measured,
+
+  -- Timing Info
+  i.`On Shelf Time`,
+  i.`Stored Time`,
+  i.`Entering Warehouse Time`,
+  i.`Inbound Cell`,
+  i.`License Plate Number`,
+
+  -- Additional Info
+  i.`Lead Edge Orientation`,
+  i.`Container Type`,
+  i.`Report Date` as inventory_snapshot_date
+
+FROM `wmt-edw-sandbox.SYMBOTIC_DATA.snowflake_bot_errors` e
+
+LEFT JOIN `wmt-edw-sandbox.SYMBOTIC_DATA.snowflake_inventory_snapshot` i
+  ON e.CUSTOMER_CARTON_REF_0 = i.`Customer Carton Ref`
+  AND e.DC = i.DC
+  AND i.`Report Date` = '2026-02-26'  -- 👈 CHANGE THIS DATE
+
+WHERE
+  e.DC = '6035'
+  AND e.EVENT = 'suspect'
+  AND e.CALENDAR_DATE = '2026-02-26'  -- 👈 CHANGE THIS DATE
+  AND e.CUSTOMER_CARTON_REF_0 IS NOT NULL
+
+ORDER BY
+  e.DATETIME DESC,
+  e.CUSTOMER_CARTON_REF_0
