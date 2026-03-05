@@ -100,3 +100,250 @@ WHERE
 ORDER BY
   e.DATETIME DESC,
   e.CUSTOMER_CARTON_REF_0
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+PLUS Teach IN:
+
+
+
+
+-- ✅ CORRECTED: Bot Errors + Inventory + Teachin Join
+-- DC 6035 - Uses Window Functions (Proper BigQuery Approach)
+--
+-- This query joins:
+--   1. Bot Errors (snowflake_bot_errors)
+--   2. Inventory Snapshot (snowflake_inventory_snapshot)
+--   3. Teachin Data (snowflake_teachin)
+--
+-- For each error, it finds the MOST RECENT teachin that occurred
+-- BEFORE the error (taught_ts <= error_datetime)
+
+WITH teachin_clean AS (
+  SELECT 
+    SKU,
+    DC,
+    DESCRIPTION,
+    ISTAUGHT,
+    ISELIGIBLE,
+    -- Parse timestamp from string
+    SAFE.PARSE_TIMESTAMP('%Y-%m-%d %H:%M:%S.%f %Z', TAUGHTDATE) AS taught_ts,
+    TAUGHTDATE as taught_date_original
+  FROM `wmt-edw-sandbox.SYMBOTIC_DATA.snowflake_teachin`
+  WHERE DC = '6035'
+),
+
+errors_with_inv AS (
+  SELECT 
+    -- Error fields
+    e.DATETIME AS error_datetime,
+    e.EVENT AS error_event,
+    e.SUBEVENT AS error_subevent,
+    e.CUSTOMER_CARTON_REF_0 AS carton_ref,
+    e.VIN AS bot_vin,
+    e.BOT AS bot_number,
+    e.ACTION_TYPE,
+    e.CASE_GROUP_NUMBER AS error_case_group,
+    e.LEVEL AS error_level,
+    e.SEVERITY,
+    e.ECODE_DESCRIPTION,
+    e.DEVICE_FAULT_CODE,
+    e.DEVICE_FAULT_DESCRIPTION,
+    e.MEASURED_LENGTH AS bot_measured_length,
+    e.MEASURED_WIDTH AS bot_measured_width,
+    e.EXPECTED_LENGTH AS bot_expected_length,
+    e.EXPECTED_WIDTH AS bot_expected_width,
+    e.X_COORDINATE,
+    e.Y_COORDINATE,
+    e.Z_COORDINATE,
+    e.YAW,
+    e.STACK_TRACE,
+    e.DC AS error_dc,
+    e.CALENDAR_DATE,
+    
+    -- Inventory fields
+    i.SKU AS inv_sku,
+    i.`SKU Description` AS inv_sku_description,
+    i.Aisle,
+    i.Bay,
+    i.Shelf,
+    i.Level AS inventory_level,
+    i.AisleSide,
+    i.`Seg Zone`,
+    i.`Is Suspect` AS is_suspect_in_inventory,
+    i.`Suspect Reason` AS inventory_suspect_reason,
+    i.`Suspect Action` AS inventory_suspect_action,
+    i.`Suspect Time` AS inventory_suspect_time,
+    i.`Carton Length` AS inv_carton_length,
+    i.`Carton Width` AS inv_carton_width,
+    i.`Carton Height` AS inv_carton_height,
+    i.`Carton Weight` AS inv_carton_weight,
+    i.`ODV Length`,
+    i.`ODV Width`,
+    i.`ODV Height`,
+    i.`On Shelf Time`,
+    i.`Entering Warehouse Time`,
+    i.`Inbound Cell`,
+    i.`Report Date` AS inventory_snapshot_date
+    
+  FROM `wmt-edw-sandbox.SYMBOTIC_DATA.snowflake_bot_errors` e
+  
+  LEFT JOIN `wmt-edw-sandbox.SYMBOTIC_DATA.snowflake_inventory_snapshot` i
+    ON e.CUSTOMER_CARTON_REF_0 = i.`Customer Carton Ref`
+    AND e.DC = i.DC
+    AND i.`Report Date` = '2026-03-01'  -- 👈 CHANGE THIS DATE
+  
+  WHERE 
+    e.DC = '6035'
+    AND e.EVENT = 'suspect'
+    AND e.CALENDAR_DATE = '2026-03-01'  -- 👈 CHANGE THIS DATE
+    AND e.CUSTOMER_CARTON_REF_0 IS NOT NULL
+),
+
+-- Join ALL teachins, then rank them by recency
+errors_with_all_teachins AS (
+  SELECT 
+    ew.*,
+    
+    -- Teachin fields
+    t.SKU AS teachin_sku,
+    t.DESCRIPTION AS teachin_description,
+    t.ISTAUGHT AS teachin_is_taught,
+    t.taught_ts AS teachin_taught_ts,
+    t.taught_date_original AS teachin_taughtdate,
+    t.ISELIGIBLE AS teachin_is_eligible,
+    
+    -- Calculate days between teach-in and error
+    TIMESTAMP_DIFF(TIMESTAMP(ew.error_datetime), t.taught_ts, DAY) AS days_since_teachin,
+    
+    -- Rank teachins for this carton+error: most recent BEFORE error = rank 1
+    ROW_NUMBER() OVER (
+      PARTITION BY ew.carton_ref, ew.error_datetime
+      ORDER BY t.taught_ts DESC  -- Most recent first
+    ) AS teachin_rank
+    
+  FROM errors_with_inv ew
+  
+  LEFT JOIN teachin_clean t
+    ON t.SKU = ew.inv_sku  -- Join on SKU from inventory
+    AND t.DC = ew.error_dc
+    AND t.taught_ts <= TIMESTAMP(ew.error_datetime)  -- ⚠️ Only teachins BEFORE the error!
+)
+
+-- Select only the MOST RECENT teachin (rank = 1) for each error
+SELECT 
+  -- Error details
+  error_datetime,
+  error_event,
+  error_subevent,
+  carton_ref,
+  bot_vin,
+  bot_number,
+  ACTION_TYPE,
+  error_case_group,
+  error_level,
+  SEVERITY,
+  ECODE_DESCRIPTION,
+  DEVICE_FAULT_CODE,
+  DEVICE_FAULT_DESCRIPTION,
+  
+  -- Measurements
+  bot_measured_length,
+  bot_measured_width,
+  bot_expected_length,
+  bot_expected_width,
+  X_COORDINATE,
+  Y_COORDINATE,
+  Z_COORDINATE,
+  YAW,
+  STACK_TRACE,
+  
+  -- Inventory / Location
+  inv_sku,
+  inv_sku_description,
+  Aisle,
+  Bay,
+  Shelf,
+  inventory_level,
+  AisleSide,
+  `Seg Zone`,
+  is_suspect_in_inventory,
+  inventory_suspect_reason,
+  inventory_suspect_action,
+  inventory_suspect_time,
+  
+  -- Dimensions
+  inv_carton_length,
+  inv_carton_width,
+  inv_carton_height,
+  inv_carton_weight,
+  `ODV Length`,
+  `ODV Width`,
+  `ODV Height`,
+  
+  -- Timing
+  `On Shelf Time`,
+  `Entering Warehouse Time`,
+  `Inbound Cell`,
+  inventory_snapshot_date,
+  CALENDAR_DATE as error_calendar_date,
+  
+  -- Teachin data (only the MOST RECENT before error)
+  teachin_sku,
+  teachin_description,
+  teachin_is_taught,
+  teachin_taughtdate,
+  teachin_is_eligible,
+  days_since_teachin,
+  
+  -- Teachin status categorization
+  CASE 
+    WHEN teachin_sku IS NULL AND inv_sku IS NOT NULL THEN 'SKU Never Taught'
+    WHEN teachin_sku IS NULL AND inv_sku IS NULL THEN 'No Inventory Match'
+    WHEN teachin_is_taught = 'No' THEN 'Teachin Failed'
+    WHEN teachin_is_eligible = 'No' THEN 'Not Eligible for Teachin'
+    WHEN days_since_teachin > 365 THEN 'Taught >1 Year Ago'
+    WHEN days_since_teachin > 180 THEN 'Taught >6 Months Ago'
+    WHEN days_since_teachin > 30 THEN 'Taught >1 Month Ago'
+    ELSE 'Recently Taught'
+  END AS teachin_status,
+  
+  -- Dimension variance (bot measurement vs inventory)
+  ROUND((bot_measured_length * 1000) - CAST(inv_carton_length AS FLOAT64), 1) AS length_variance_mm,
+  ROUND((bot_measured_width * 1000) - CAST(inv_carton_width AS FLOAT64), 1) AS width_variance_mm
+
+FROM errors_with_all_teachins
+
+WHERE 
+  teachin_rank = 1  -- Only the most recent teachin
+  OR teachin_rank IS NULL  -- Keep errors with no teachin match
+
+ORDER BY 
+  error_datetime DESC,
+  carton_ref;
+
